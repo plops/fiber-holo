@@ -1,55 +1,74 @@
 (load "/home/martin/quicklisp/setup.lisp")
 (progn
-  (ql:quickload :cl-glut)
-  (ql:quickload :cl-opengl)
-  (ql:quickload :cl-glu))
+    (ql:quickload :cl-glut)
+    (ql:quickload :cl-opengl)
+    (ql:quickload :cl-glu)
+    )
 
 (defpackage :g (:use :cl :gl :ccl))
-
 (in-package :g)
 
-(use-interface-dir :fftw3)
-(open-shared-library "libfftw3.so")
+#.(progn
+  (use-interface-dir :fftw3)
+  (open-shared-library "libfftw3.so"))
+
 (defun ft (a)
-  (destructuring-bind (h w) (array-dimensions a)
-    (multiple-value-bind (ind indp) (ccl:make-heap-ivector 2 'fixnum)
-      (setf (aref ind 0) h
-	    (aref ind 1) w)
-      (multiple-value-bind (b bp) (ccl:make-heap-ivector (* 2 h w) 'double-float)
-	(let ((a1 (make-array (* w h) :element-type (array-element-type a)
-			      :displaced-to a)))
-	  (if (complexp (aref a1 0))
-	      (dotimes (i (length a1))
-		(setf (aref b (* 2 i))       (* 1d0 (realpart (aref a1 i)))
-		      (aref b (+ 1 (* 2 i))) (* 1d0 (imagpart (aref a1 i)))))
-	      (dotimes (i (length a1))
-		(setf (aref b (* 2 i))       (* 1d0 (aref a1 i))
-		      (aref b (+ 1 (* 2 i))) 0d0))))
-	(multiple-value-bind (c cp) (ccl:make-heap-ivector (* 2 h w) 'double-float)	
-	  (prog1
-	     (progn
-	       (let ((plan (#_fftw_plan_dft 2 indp bp cp #$FFTW_FORWARD #$FFTW_ESTIMATE)))
-		 (#_fftw_execute plan))
-	       (let* ((d (make-array (array-dimensions a)
-				     :element-type '(complex double-float)))
-		      (d1 (make-array (* w h) :element-type (array-element-type d)
-				      :displaced-to d)))
-		 (dotimes (i (length d1))
-		   (setf (aref d1 i) (complex (aref c (* 2 i))       
-					     (aref c (+ 1 (* 2 i)))) ))
-		 d))
-	    (ccl:dispose-heap-ivector b)
-	    (ccl:dispose-heap-ivector c)))))))
+   (destructuring-bind (h w) (array-dimensions a)
+     (multiple-value-bind (ind indp) (ccl:make-heap-ivector 2 '(signed-byte 32))
+       (setf (aref ind 0) h
+	     (aref ind 1) w)
+       (multiple-value-bind (b bp) (ccl:make-heap-ivector (* 2 h w) 'double-float)
+	 (let ((a1 (make-array (* w h) :element-type (array-element-type a)
+			       :displaced-to a)))
+	   (if (complexp (aref a1 0))
+	       (dotimes (i (length a1))
+		 (setf (aref b (* 2 i))       (* 1d0 (realpart (aref a1 i)))
+		       (aref b (+ 1 (* 2 i))) (* 1d0 (imagpart (aref a1 i)))))
+	       (dotimes (i (length a1))
+		 (setf (aref b (* 2 i))       (* 1d0 (aref a1 i))
+		       (aref b (+ 1 (* 2 i))) 0d0))))
+	 (multiple-value-bind (c cp) (ccl:make-heap-ivector (* 2 h w) 'double-float)	
+	   (prog1
+	       (progn
+		 (let ((plan (#_fftw_plan_dft 2 indp bp cp #$FFTW_FORWARD #$FFTW_ESTIMATE)))
+		   (when (%null-ptr-p plan)
+		     (error "fftw_plan_dft ~a returned null." (list bp cp)))
+		   (unwind-protect
+			(#_fftw_execute plan)
+		     nil #+nil(#_fftw_destroy_plan plan)))
+		 (let* ((d (make-array (array-dimensions a)
+				       :element-type '(complex double-float)))
+			(d1 (make-array (* w h) :element-type (array-element-type d)
+					:displaced-to d)))
+		   (dotimes (i (length d1))
+		     (setf (aref d1 i) (complex (aref c (* 2 i))       
+						(aref c (+ 1 (* 2 i)))) ))
+		   d))
+	     (ccl:dispose-heap-ivector b)
+	     (ccl:dispose-heap-ivector c)))))))
 
-(defparameter *kbla* (ft *bla*))
+(defvar *bla* (make-array (list 1024 1024) :element-type '(unsigned-byte 16)))
+#+nil
+(defparameter *kbla* (scale-ub16 (ft *bla*)))
 
+
+(defun scale-ub16 (a)
+  (declare (type (array (complex double-float) 2) a))
+  (let* ((b (make-array (array-dimensions a) :element-type '(unsigned-byte 16)))
+	 (b1 (make-array (reduce #'* (array-dimensions a)) :element-type '(unsigned-byte 16)
+			 :displaced-to b))
+	 (a1 (make-array (reduce #'* (array-dimensions a)) :element-type (array-element-type a)
+			 :displaced-to a)))
+    (dotimes (i (length b1))
+      (setf (aref b1 i) (max 0 (min 65535 (floor (abs (aref a1 i)) 500)))))
+    b))
 
 
 
 ;;ccl::*shared-libraries*
 ;;ccl::*eeps* ;; hash table with external functions
 
-(progn (use-interface-dir :andor)
+#.(progn (use-interface-dir :andor)
        (open-shared-library "libandor.so"))
 (progn
   (defun get-available-cameras ()
@@ -146,7 +165,9 @@
 	    (%get-single-float (%int-to-ptr (%address-of kinetic))))))
 
   (defun free-internal-memory ()
-    (assert (= #$DRV_SUCCESS (#_FreeInternalMemory))))
+    (let ((r (#_FreeInternalMemory)))
+      (unless (= #$DRV_SUCCESS r)
+	(break "FreeInternalMemory returned ~a." r))))
   
   (defun get-number-ad-channels ()
     (rlet ((n :int))
@@ -209,51 +230,62 @@
   (set-hs-speed :typ 1 :index 0)
   (get-acquisition-timings))
 
+(progn
+ (defun get-time ()
+   (rlet ((tv :timeval))
+     (#_gettimeofday tv (%null-ptr))
+     (+ (* 1000000 (pref tv :timeval.tv_sec))
+	(pref tv :timeval.tv_usec))))
+ (defun acquire-one-image ()
+   (start-acquisition) 
+   (unwind-protect 
+	(progn
+	  (let ((start (get-time)))
+	    (loop while (and (/= #$DRV_IDLE (get-status))
+			     (< (- (get-time) start) 1e6)) do
+		 (sleep .01))
+	    (format t "aquisition took ~a us~%" (- (get-time) start)))
+	  (when (= #$DRV_IDLE (get-status))
+	    (defparameter *bla* 
+	      (get-acquired-data16))))
+     (progn
+       (when (= #$DRV_ACQUIRING (get-status))
+	 (abort-acquisition))
+       (free-internal-memory)))  
+   (sleep .1)))
+
+
 #+nil
-(get-number-available-images)
+(time
+ (progn (acquire-one-image)
+	(defparameter *kbla* (scale-ub16 (ft *bla*)))))
+
+(defparameter *fft-p* t)
+#+nil
+(ccl:process-run-function "fft" 
+			  #'(lambda ()
+			      (loop while *fft-p* do
+				   (defparameter *kbla* (scale-ub16 (ft *bla*)))
+				   )))
+#+nil
+(time
+ (defparameter *kbla* (scale-ub16 (ft *bla*))))
 
 (defparameter *acquire-p* t)
-
-#+nil
-(abort-acquisition)
-
-#+nil
-(get-status)
-
-(defun get-time ()
- (rlet ((tv :timeval))
-   (#_gettimeofday tv (%null-ptr))
-   (+ (* 1000000 (pref tv :timeval.tv_sec))
-      (pref tv :timeval.tv_usec))))
-
-#+nil
-(get-time)
-
-(defun acquire-one-image ()
-  (start-acquisition) 
-  (let ((start (get-time)))
-   (loop while (/= #$DRV_IDLE (get-status)) do
-	(sleep .01))
-   (format t "aquisition took ~a us~%" (- (get-time) start)))
-  (defparameter *bla* 
-    (get-acquired-data16))
-  (free-internal-memory)
-  (sleep .01))
-
-#+nil
-(acquire-one-image)
-
 #+nil
 (ccl:process-run-function "acquisition" 
 			  #'(lambda ()
 			      (loop while *acquire-p* do
-				   (acquire-one-image))))
+				   (acquire-one-image)
+				   )))
 #+nil
 (initialize)
 
 #+nil
 (get-status)
 
+#+nil
+(abort-acquisition)
 #+nil
 (set-read-mode)
 
@@ -268,6 +300,112 @@
 ;;sed -i -e s/SYSFS/ATTR/g *.rules
 #+nil
 (external-call "print_cam" :void)
+
+(use-interface-dir :v4l2)
+
+(progn
+  (defvar *v4l-fd* nil)
+  (defun v4l-open (&optional (fn "/dev/video0"))
+    (unless *v4l-fd*
+     (setf *v4l-fd* (with-cstrs ((fns fn))
+		      (#_open fns #$O_RDWR)))))
+  (defun v4l-close ()
+    (when *v4l-fd*
+     (#_close *v4l-fd*))
+    (setf *v4l-fd* nil))
+
+  (defvar *buffers* nil)
+  (defun v4l-allocate-buffers (&key (w 640) (h 480) (bytes-per-pixel 2))
+    (unless *buffers*
+     (setf *buffers* (let* ((number-buffers 4)
+			    (length (* w h bytes-per-pixel))
+			    (n (* number-buffers length))) 
+		       (multiple-value-bind (a ap) (make-heap-ivector n '(unsigned-byte 8))
+			 (list ap length a (make-array (list number-buffers h w bytes-per-pixel)
+						       :element-type '(unsigned-byte 8)
+						       :displaced-to a)))))))
+  (defun v4l-clear-buffers ()
+    (when *buffers*
+      (destructuring-bind (ap length a a4) *buffers*
+	(dispose-heap-ivector a))
+      (setf *buffers* nil)))
+  (defun v4l-queue-buffers ()
+  (destructuring-bind (ap length a a4) *buffers*
+    (destructuring-bind (k h w c) (array-dimensions a4)
+     (loop for i below k collect
+	  (rletz ((buf :v4l2_buffer
+		       :type #$V4L2_BUF_TYPE_VIDEO_CAPTURE
+		       :memory #$V4L2_MEMORY_USERPTR
+		       :index i
+		       :m.userptr (+ (* i length) (%ptr-to-int ap))
+		       :length length))
+	    (let ((r (#_ioctl *v4l-fd* #$VIDIOC_QBUF :address buf)))
+	     (assert (= 0 r))
+	     r))))))
+  (defun v4l-stream-on ()
+    (multiple-value-bind (a ap) (make-heap-ivector 1 '(signed-byte 64))
+      (setf (aref a 0) #$V4L2_BUF_TYPE_VIDEO_CAPTURE)
+      (assert (= 0 (#_ioctl *v4l-fd* #$VIDIOC_STREAMON :address ap)))
+      (dispose-heap-ivector a)))
+  
+  (defun v4l-set-format (&key (w 640) (h 480))
+     (rletz ((f :v4l2_format
+		:type #$V4L2_BUF_TYPE_VIDEO_CAPTURE
+		:fmt.pix.width w
+		:fmt.pix.height h
+		:fmt.pix.pixelformat #$V4L2_PIX_FMT_YUYV))
+       (assert (= 0 (#_ioctl *v4l-fd* #$VIDIOC_S_FMT :address f)))
+       (assert (= 0 (#_ioctl *v4l-fd* #$VIDIOC_G_FMT :address f)))
+       (pref f :v4l2_format.fmt.pix.width)))
+  (defun v4l-switch-to-user-pointers ()
+    (rletz ((req :v4l2_requestbuffers ;; i want to read data with user pointers
+		 :count 4
+		 :type #$V4L2_BUF_TYPE_VIDEO_CAPTURE
+		 :memory #$V4L2_MEMORY_USERPTR))
+      (assert (= 0 (#_ioctl *v4l-fd* #$VIDIOC_REQBUFS :address req)))))
+  (defun v4l-init ()
+    (unless *v4l-fd*
+      (v4l-open))
+    (v4l-set-format)
+    (v4l-switch-to-user-pointers)
+    
+    (v4l-clear-buffers)
+    (v4l-allocate-buffers)
+    (v4l-queue-buffers)
+    (v4l-stream-on))
+  (defun v4l-uninit ()
+    (v4l-clear-buffers)
+    (v4l-close))
+  (defun read-frame ()
+    (rletz ((buf :v4l2_buffer
+		 :type #$V4L2_BUF_TYPE_VIDEO_CAPTURE
+		 :memory #$V4L2_MEMORY_USERPTR))
+      (#_ioctl *v4l-fd* #$VIDIOC_DQBUF :address buf)
+      (prog1 
+	  (destructuring-bind (ap length a a4) *buffers*
+	    (floor (- (pref buf :v4l2_buffer.m.userptr) (%ptr-to-int ap))
+		   length))
+	(#_ioctl *v4l-fd* #$VIDIOC_QBUF :address buf))))
+  (defun wait-and-read-frame ()
+    (%stack-block ((fdset ccl::*fd-set-size*))
+      (ccl::fd-zero fdset)
+      (ccl::fd-set *v4l-fd* fdset)
+      (rletz ((tv :timeval
+		  :tv_sec 1
+		  :tv_usec 0))
+	(let ((r (#_select (+ 1 *v4l-fd*) fdset (%null-ptr) (%null-ptr) tv)))
+	 (if (= 1 r)
+	     (read-frame)
+	     (break "error: select returned ~a." (list r (when (< r 0) (ccl::%strerror (ccl::%get-errno)))))))))))
+#+nil
+(v4l-uninit)
+#+nil
+(v4l-init)
+#+nil
+(wait-and-read-frame)
+
+
+
 
 
 
@@ -291,8 +429,40 @@
      (translate (sin (* 8 2 pi (/ rot 360))) 0 -2.2)
      (color 1 1 1)
      (rect .14 -3 -.14 3))
+   (with-pushed-matrix 
+     (translate -0.5 0 -1.4)
+     (scale .5 .5 1)
+     (color 1 0 0) (rect 0 0 1 .01)
+     (color 0 1 0) (rect 0 0 .01 1))
    (with-pushed-matrix
-     (translate -.5 -.5 -1.4)
+     (translate -0.5 0 -1.8)
+     (scale 1 1 1)
+     (color 1 1 1)
+     (let ((obj (first (gen-textures 1))))
+       (bind-texture :texture-2d obj)
+       
+       (tex-parameter :texture-2d :texture-min-filter :linear)
+       (tex-parameter :texture-2d :texture-mag-filter :linear)
+       (let ((b1 (make-array (* 1024 1024) :element-type '(unsigned-byte 16)
+			     :displaced-to *kbla*)))
+	 (multiple-value-bind (a ap)
+	     (make-heap-ivector (* 1024 1024)
+				'(unsigned-byte 16))
+	   (dotimes (i (* 1024 1024))
+	     (setf (aref a i) (min 65535 (max 0 (* 50  (+ -0 (aref b1 i)))))))
+	   (tex-image-2d :texture-2d 0 :rgba 1024 1024 0 :green :unsigned-short
+			 ap) 
+	   (dispose-heap-ivector a)))
+       (enable :texture-2d)
+       (with-primitive :quads
+	 (vertex 0 0) (tex-coord 0 0)
+	 (vertex 0 1) (tex-coord 0 1)
+	 (vertex 1 1) (tex-coord 1 1)
+	 (vertex 1 0) (tex-coord 1 0))
+       (disable :texture-2d)
+       (delete-textures (list obj))))
+   (with-pushed-matrix
+     (translate -0.5 -1.0 -1.8)
      (scale 1 1 1)
      (color 1 1 1)
      (let ((obj (first (gen-textures 1))))
@@ -306,7 +476,8 @@
 	     (make-heap-ivector (* 1024 1024)
 				'(unsigned-byte 16))
 	   (dotimes (i (* 1024 1024))
-	     (setf (aref a i) (min 65535 (max 0 (* 5 (+ -0 (aref b1 i)))))))
+	     (setf (aref a i) (min 65535 (max 0 (* 10
+  (+ -0 (aref b1 i)))))))
 	   (tex-image-2d :texture-2d 0 :rgba 1024 1024 0 :green :unsigned-short
 			 ap) 
 	   (dispose-heap-ivector a)))
