@@ -12,6 +12,29 @@
   (use-interface-dir :fftw3)
   (open-shared-library "libfftw3.so"))
 
+(let ((border .7))
+ (loop for i below 20 collect 
+      (let ((r (/ i 20d0)))
+	)
+      ))
+
+(defparameter *window* 
+  (let ((a (make-array (list 512 512) :element-type 'double-float))
+	(border .5))
+    (dotimes (i 512)
+      (dotimes (j 512)
+	(setf (aref a j i)
+	      (*  (expt -1d0 (+ i j))
+	       (let* ((x (/ (- i 256) 256d0))
+		      (y (/ (- j 256) 256d0))
+		      (r (sqrt (+ (* x x) (* y y)))
+			))
+		 (if (<  r (- 1 border)) 
+		     1d0
+		     (let ((rr (* (/ border) (- r (- 1 border)))))
+		       (* .5 (+ 1 (cos (* pi rr)))))))))))
+    a)) 
+
 (defun ft (a)
    (destructuring-bind (h w) (array-dimensions a)
      (multiple-value-bind (ind indp) (ccl:make-heap-ivector 2 '(signed-byte 32))
@@ -19,14 +42,15 @@
 	     (aref ind 1) w)
        (multiple-value-bind (b bp) (ccl:make-heap-ivector (* 2 h w) 'double-float)
 	 (let ((a1 (make-array (* w h) :element-type (array-element-type a)
-			       :displaced-to a)))
+			       :displaced-to a))
+	       (w1 (make-array (* 512 512) :element-type (array-element-type *window*)
+			       :displaced-to *window*)))
 	   (if (complexp (aref a1 0))
 	       (dotimes (i (length a1))
 		 (setf (aref b (* 2 i))       (* 1d0 (realpart (aref a1 i)))
 		       (aref b (+ 1 (* 2 i))) (* 1d0 (imagpart (aref a1 i)))))
 	       (dotimes (i (length a1))
-		 (setf (aref b (* 2 i))       (* (expt -1d0 (+ (mod i w)
-							       (floor i h))) (aref a1 i))
+		 (setf (aref b (* 2 i))       (* (aref w1 i) (aref a1 i))
 		       (aref b (+ 1 (* 2 i))) 0d0))))
 	 (multiple-value-bind (c cp) (ccl:make-heap-ivector (* 2 h w) 'double-float)	
 	   (prog1
@@ -482,7 +506,7 @@
 		(make-heap-ivector (* 512 512)
 				   '(unsigned-byte 16))
 	      (dotimes (i (* 512 512))
-		(setf (aref a i) (min 65535 (max 0 (* 256 30  (+ 0 (aref b1 i)))))))
+		(setf (aref a i) (min 65535 (max 0 (* 256 200  (+ (aref b1 i)))))))
 	      (tex-image-2d :texture-2d 0 :rgba 512 512 0 :green :unsigned-short
 			    ap) 
 	      (dispose-heap-ivector a)))
@@ -504,7 +528,9 @@
 	  (tex-parameter :texture-2d :texture-min-filter :linear)
 	  (tex-parameter :texture-2d :texture-mag-filter :linear)
 	  (let ((b1 (make-array (* 512 512) :element-type '(unsigned-byte 16)
-				:displaced-to *bla*)))
+				:displaced-to *bla*))
+		#+nil(w1 (make-array (* 512 512) :element-type 'double-float
+				:displaced-to *window*)))
 	    (multiple-value-bind (a ap)
 		(make-heap-ivector (* 512 512)
 				   '(unsigned-byte 16))
