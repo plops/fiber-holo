@@ -8,6 +8,30 @@
 (defpackage :g (:use :cl :gl :ccl))
 (in-package :g)
 
+(load "/home/martin/src/ccl/library/serial-streams.lisp")
+
+(defparameter *serial*
+  (ccl::make-serial-stream "/dev/ttyACM0"
+                           ;:format 'character
+                           :baud-rate 9600
+                           :parity nil
+                           :char-bits 8
+                           :stop-bits 1
+                           :flow-control nil))
+
+(defun write-mirror (voltage)
+  (format *serial* "v~d~%" voltage)
+  (force-output *serial*)
+  (sleep .1)
+  (list 
+   (read-line *serial*)
+   (read-line *serial*)))
+
+#+nil
+(write-mirror -70)
+
+
+
 #.(progn
   (use-interface-dir :fftw3)
   (open-shared-library "libfftw3.so"))
@@ -315,6 +339,7 @@
 				   (sleep .1)
 				   )))
 
+
 #+nil
 (initialize)
 
@@ -492,7 +517,7 @@
 	(color 1 0 0) (rect 0 0 1 .01)
 	(color 0 1 0) (rect 0 0 .01 1))
       (with-pushed-matrix
-	(translate -0.5 0 -1.8)
+	(translate -.5 0 -1.8)
 	(scale 1 1 1)
 	(color 1 1 1)
 	(let ((obj (first (gen-textures 1))))
@@ -506,7 +531,7 @@
 		(make-heap-ivector (* 512 512)
 				   '(unsigned-byte 16))
 	      (dotimes (i (* 512 512))
-		(setf (aref a i) (min 65535 (max 0 (* 256 200  (+ (aref b1 i)))))))
+		(setf (aref a i) (min 65535 (max 0 (* 256 120  (+ (aref b1 i)))))))
 	      (tex-image-2d :texture-2d 0 :rgba 512 512 0 :green :unsigned-short
 			    ap) 
 	      (dispose-heap-ivector a)))
