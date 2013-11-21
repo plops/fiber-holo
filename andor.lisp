@@ -8,8 +8,10 @@
 (defpackage :g (:use :cl :gl :ccl))
 (in-package :g)
 
-(load "/home/martin/src/ccl/library/serial-streams.lisp")
+#.(load "/home/martin/src/ccl/library/serial-streams.lisp")
 
+(defvar *serial* nil)
+#+nil
 (defparameter *serial*
   (ccl::make-serial-stream "/dev/ttyACM0"
                            ;:format 'character
@@ -31,11 +33,11 @@
 (write-mirror -70)
 
 
-
 #.(progn
   (use-interface-dir :fftw3)
   (open-shared-library "libfftw3.so"))
 
+#+nil
 (let ((border .7))
  (loop for i below 20 collect 
       (let ((r (/ i 20d0)))
@@ -331,6 +333,9 @@
 			      (loop while *acquire-p* do
 				   (acquire-one-image)
 				   )))
+
+
+
 #+nil
 (ccl:process-run-function "acquisition" 
 			  #'(lambda ()
@@ -339,6 +344,45 @@
 				   (sleep .1)
 				   )))
 
+
+
+(defvar *buffers* nil)
+(progn
+  (defun clear-frame ()
+    (let* ((b1 (make-array (* 512 512) :element-type '(unsigned-byte 64)
+			   :initial-element 0))
+	   (b (make-array (list 512 512) :element-type '(unsigned-byte 64)
+			 :displaced-to b1)))
+      (defparameter *bla* b)))
+  (defun capture-and-accumulate-frame ()
+    (let* ((k (wait-and-read-frame))
+	   (b1 (make-array (* 512 512) :element-type '(unsigned-byte 64)))
+	   (b (make-array (list 512 512) :element-type '(unsigned-byte 64)
+			 :displaced-to b1)))
+      (declare (type (array (unsigned-byte 64) 2) b)
+	       (type (array (unsigned-byte 64) 1) b1))
+      (destructuring-bind  (ap length a a4) *buffers*
+	(declare (type (array (unsigned-byte 8) 1) a)
+		 (type (array (unsigned-byte 8) 4) a4))
+	(destructuring-bind (kmax h w c) (array-dimensions a4)
+	  (dotimes (i (min 512 w))
+	   (dotimes (j (min 512 h))
+	     (setf (aref b j i) (+ (aref b j i)
+				   (aref a4 k (* 2 j) (* 2 i) 0)))))))
+     (defparameter *bla* b))))
+
+#+nil
+(progn
+  (write-mirror -70)
+  (dotimes (i 20)
+      (wait-and-read-frame))
+  (clear-frame)
+  (dotimes (i 10)
+    (capture-and-accumulate-frame)))
+
+
+#+nil
+(clear-frame)
 
 #+nil
 (initialize)
@@ -455,10 +499,17 @@
       (rletz ((tv :timeval
 		  :tv_sec 1
 		  :tv_usec 0))
-	(let ((r (#_select (+ 1 *v4l-fd*) fdset (%null-ptr) (%null-ptr) tv)))
-	 (if (= 1 r)
-	     (read-frame)
-	     (break "error: select returned ~a." (list r (when (< r 0) (ccl::%strerror (ccl::%get-errno)))))))))))
+	(tagbody
+	 :again
+	   (let ((r (#_select (+ 1 *v4l-fd*) fdset (%null-ptr) (%null-ptr) tv)))
+	     (if (= 1 r)
+		 (read-frame)
+		 (break "error: select returned ~a." 
+			(list r 
+			      (when (< r 0)
+				(ccl::%get-errno)) 
+			      (when (< r 0)
+				(ccl::%strerror (ccl::%get-errno))))))))))))
 #+nil
 (v4l-uninit)
 #+nil
@@ -552,7 +603,7 @@
 	  
 	  (tex-parameter :texture-2d :texture-min-filter :linear)
 	  (tex-parameter :texture-2d :texture-mag-filter :linear)
-	  (let ((b1 (make-array (* 512 512) :element-type '(unsigned-byte 16)
+	  (let ((b1 (make-array (* 512 512) :element-type (array-element-type *bla*)
 				:displaced-to *bla*))
 		#+nil(w1 (make-array (* 512 512) :element-type 'double-float
 				:displaced-to *window*)))
