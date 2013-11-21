@@ -1,9 +1,9 @@
 (load "/home/martin/quicklisp/setup.lisp")
 (progn
-    (ql:quickload :cl-glut)
-    (ql:quickload :cl-opengl)
-    (ql:quickload :cl-glu)
-    )
+  (ql:quickload :cl-glut)
+  (ql:quickload :cl-opengl)
+  (ql:quickload :cl-glu)
+  )
 
 (defpackage :g (:use :cl :gl :ccl))
 (in-package :g)
@@ -25,7 +25,8 @@
 		 (setf (aref b (* 2 i))       (* 1d0 (realpart (aref a1 i)))
 		       (aref b (+ 1 (* 2 i))) (* 1d0 (imagpart (aref a1 i)))))
 	       (dotimes (i (length a1))
-		 (setf (aref b (* 2 i))       (* 1d0 (aref a1 i))
+		 (setf (aref b (* 2 i))       (* (expt -1d0 (+ (mod i w)
+							       (floor i h))) (aref a1 i))
 		       (aref b (+ 1 (* 2 i))) 0d0))))
 	 (multiple-value-bind (c cp) (ccl:make-heap-ivector (* 2 h w) 'double-float)	
 	   (prog1
@@ -47,7 +48,8 @@
 	     (ccl:dispose-heap-ivector b)
 	     (ccl:dispose-heap-ivector c)))))))
 
-(defvar *bla* (make-array (list 1024 1024) :element-type '(unsigned-byte 16)))
+(defvar *bla* (make-array (list 512 512) :element-type '(unsigned-byte 16)))
+(defvar *kbla* (make-array (list 512 512) :element-type '(unsigned-byte 16)))
 #+nil
 (defparameter *kbla* (scale-ub16 (ft *bla*)))
 
@@ -260,6 +262,9 @@
  (progn (acquire-one-image)
 	(defparameter *kbla* (scale-ub16 (ft *bla*)))))
 
+#+nil
+(defparameter *kbla* (scale-ub16 (ft *bla*)))
+
 (defparameter *fft-p* t)
 #+nil
 (ccl:process-run-function "fft" 
@@ -278,6 +283,14 @@
 			      (loop while *acquire-p* do
 				   (acquire-one-image)
 				   )))
+#+nil
+(ccl:process-run-function "acquisition" 
+			  #'(lambda ()
+			      (loop while *acquire-p* do
+				   (capture-and-copy-frame)
+				   (sleep .1)
+				   )))
+
 #+nil
 (initialize)
 
@@ -301,11 +314,11 @@
 #+nil
 (external-call "print_cam" :void)
 
-(use-interface-dir :v4l2)
+#.(use-interface-dir :v4l2)
 
 (progn
   (defvar *v4l-fd* nil)
-  (defun v4l-open (&optional (fn "/dev/video0"))
+  (defun v4l-open (&optional (fn "/dev/video1"))
     (unless *v4l-fd*
      (setf *v4l-fd* (with-cstrs ((fns fn))
 		      (#_open fns #$O_RDWR)))))
@@ -315,7 +328,7 @@
     (setf *v4l-fd* nil))
 
   (defvar *buffers* nil)
-  (defun v4l-allocate-buffers (&key (w 640) (h 480) (bytes-per-pixel 2))
+  (defun v4l-allocate-buffers (&key (w 1600) (h 1200) (bytes-per-pixel 2))
     (unless *buffers*
      (setf *buffers* (let* ((number-buffers 4)
 			    (length (* w h bytes-per-pixel))
@@ -348,7 +361,7 @@
       (assert (= 0 (#_ioctl *v4l-fd* #$VIDIOC_STREAMON :address ap)))
       (dispose-heap-ivector a)))
   
-  (defun v4l-set-format (&key (w 640) (h 480))
+  (defun v4l-set-format (&key (w 1600) (h 1200))
      (rletz ((f :v4l2_format
 		:type #$V4L2_BUF_TYPE_VIDEO_CAPTURE
 		:fmt.pix.width w
@@ -404,95 +417,130 @@
 #+nil
 (wait-and-read-frame)
 
+#+nil
+(capture-and-copy-frame)
+
+(progn
+  (defun capture-and-copy-frame ()
+    (let* ((k (wait-and-read-frame))
+	   (b1 (make-array (* 512 512) :element-type '(unsigned-byte 16)))
+	   (b (make-array (list 512 512) :element-type '(unsigned-byte 16)
+			  :displaced-to b1)))
+      (declare (type (array (unsigned-byte 8) 2) b)
+	       (type (array (unsigned-byte 8) 1) b1))
+      (destructuring-bind  (ap length a a4) *buffers*
+	(declare (type (array (unsigned-byte 8) 1) a)
+		 (type (array (unsigned-byte 8) 4) a4))
+	(destructuring-bind (kmax h w c) (array-dimensions a4)
+	  (dotimes (i (min 512 w))
+	    (dotimes (j (min 512 h))
+	      (setf (aref b j i) (aref a4 k (* 2 j) (* 2 i) 0))))))
+      (defparameter *bla* b)))
 
 
+  #+nil
+  (capture-and-copy-frame)
 
 
+  (let ((rot 0))
+    (defun draw ()
+      (clear :color-buffer :depth-buffer)
+      (color 1 1 1)
+      (incf rot 1)
+      (if (< 360 rot)
+	  (setf rot 0))
+      (with-pushed-matrix
+	(translate -1.2 -2.4 -5)
+	(rotate (* 3 rot) 1 0 0)
+	(line-width 2)
+	(let ((r .3))
+	  (glut:wire-sphere r 15 7)
+	  (color 0 0 0 1)
+	  (glut:solid-sphere (* .99 r) 15 7)))
 
-(let ((rot 0))
- (defun draw ()
-   (clear :color-buffer :depth-buffer)
-   (color 1 1 1)
-   (incf rot 1)
-   (if (< 360 rot)
-       (setf rot 0))
-   (with-pushed-matrix
-     (translate -1.2 -2.4 -5)
-     (rotate (* 3 rot) 1 0 0)
-     (line-width 2)
-     (let ((r .3))
-       (glut:wire-sphere r 15 7)
-       (color 0 0 0 1)
-       (glut:solid-sphere (* .99 r) 15 7)))
-
-   (with-pushed-matrix
-     (translate (sin (* 8 2 pi (/ rot 360))) 0 -2.2)
-     (color 1 1 1)
-     (rect .14 -3 -.14 3))
-   (with-pushed-matrix 
-     (translate -0.5 0 -1.4)
-     (scale .5 .5 1)
-     (color 1 0 0) (rect 0 0 1 .01)
-     (color 0 1 0) (rect 0 0 .01 1))
-   (with-pushed-matrix
-     (translate -0.5 0 -1.8)
-     (scale 1 1 1)
-     (color 1 1 1)
-     (let ((obj (first (gen-textures 1))))
-       (bind-texture :texture-2d obj)
-       
-       (tex-parameter :texture-2d :texture-min-filter :linear)
-       (tex-parameter :texture-2d :texture-mag-filter :linear)
-       (let ((b1 (make-array (* 1024 1024) :element-type '(unsigned-byte 16)
-			     :displaced-to *kbla*)))
-	 (multiple-value-bind (a ap)
-	     (make-heap-ivector (* 1024 1024)
-				'(unsigned-byte 16))
-	   (dotimes (i (* 1024 1024))
-	     (setf (aref a i) (min 65535 (max 0 (* 50  (+ -0 (aref b1 i)))))))
-	   (tex-image-2d :texture-2d 0 :rgba 1024 1024 0 :green :unsigned-short
-			 ap) 
-	   (dispose-heap-ivector a)))
-       (enable :texture-2d)
-       (with-primitive :quads
-	 (vertex 0 0) (tex-coord 0 0)
-	 (vertex 0 1) (tex-coord 0 1)
-	 (vertex 1 1) (tex-coord 1 1)
-	 (vertex 1 0) (tex-coord 1 0))
-       (disable :texture-2d)
-       (delete-textures (list obj))))
-   (with-pushed-matrix
-     (translate -0.5 -1.0 -1.8)
-     (scale 1 1 1)
-     (color 1 1 1)
-     (let ((obj (first (gen-textures 1))))
-       (bind-texture :texture-2d obj)
-       
-       (tex-parameter :texture-2d :texture-min-filter :linear)
-       (tex-parameter :texture-2d :texture-mag-filter :linear)
-       (let ((b1 (make-array (* 1024 1024) :element-type '(unsigned-byte 16)
-			     :displaced-to *bla*)))
-	 (multiple-value-bind (a ap)
-	     (make-heap-ivector (* 1024 1024)
-				'(unsigned-byte 16))
-	   (dotimes (i (* 1024 1024))
-	     (setf (aref a i) (min 65535 (max 0 (* 10
-  (+ -0 (aref b1 i)))))))
-	   (tex-image-2d :texture-2d 0 :rgba 1024 1024 0 :green :unsigned-short
-			 ap) 
-	   (dispose-heap-ivector a)))
-       (enable :texture-2d)
-       (with-primitive :quads
-	 (vertex 0 0) (tex-coord 0 0)
-	 (vertex 0 1) (tex-coord 0 1)
-	 (vertex 1 1) (tex-coord 1 1)
-	 (vertex 1 0) (tex-coord 1 0))
-       (disable :texture-2d)
-       (delete-textures (list obj))))
-   (flush)
-   (sleep (/ 61.3))
-;   (cl-opengl-bindings:wait-sync )
-   (glut:post-redisplay)))
+      (with-pushed-matrix
+	(translate (sin (* 8 2 pi (/ rot 360))) 0 -2.2)
+	(color 1 1 1)
+	(rect .14 -3 -.14 3))
+      (with-pushed-matrix 
+	(translate -0.5 0 -1.4)
+	(scale .5 .5 1)
+	(color 1 0 0) (rect 0 0 1 .01)
+	(color 0 1 0) (rect 0 0 .01 1))
+      (with-pushed-matrix
+	(translate -0.5 0 -1.8)
+	(scale 1 1 1)
+	(color 1 1 1)
+	(let ((obj (first (gen-textures 1))))
+	  (bind-texture :texture-2d obj)
+	  
+	  (tex-parameter :texture-2d :texture-min-filter :linear)
+	  (tex-parameter :texture-2d :texture-mag-filter :linear)
+	  (let ((b1 (make-array (* 512 512) :element-type '(unsigned-byte 16)
+				:displaced-to *kbla*)))
+	    (multiple-value-bind (a ap)
+		(make-heap-ivector (* 512 512)
+				   '(unsigned-byte 16))
+	      (dotimes (i (* 512 512))
+		(setf (aref a i) (min 65535 (max 0 (* 256 30  (+ 0 (aref b1 i)))))))
+	      (tex-image-2d :texture-2d 0 :rgba 512 512 0 :green :unsigned-short
+			    ap) 
+	      (dispose-heap-ivector a)))
+	  (enable :texture-2d)
+	  (with-primitive :quads
+	    (vertex 0 0) (tex-coord 0 0)
+	    (vertex 0 1) (tex-coord 0 1)
+	    (vertex 1 1) (tex-coord 1 1)
+	    (vertex 1 0) (tex-coord 1 0))
+	  (disable :texture-2d)
+	  (delete-textures (list obj))))
+      (with-pushed-matrix
+	(translate -0.5 -1.0 -1.8)
+	(scale 1 1 1)
+	(color 1 1 1)
+	(let ((obj (first (gen-textures 1))))
+	  (bind-texture :texture-2d obj)
+	  
+	  (tex-parameter :texture-2d :texture-min-filter :linear)
+	  (tex-parameter :texture-2d :texture-mag-filter :linear)
+	  (let ((b1 (make-array (* 512 512) :element-type '(unsigned-byte 16)
+				:displaced-to *bla*)))
+	    (multiple-value-bind (a ap)
+		(make-heap-ivector (* 512 512)
+				   '(unsigned-byte 16))
+	      (dotimes (i (* 512 512))
+		(setf (aref a i) (min 65535 (max 0 (* 256
+						      (+ -0 (aref b1 i)))))))
+	      (tex-image-2d :texture-2d 0 :rgba 512 512 0 :green :unsigned-short
+			    ap) 
+	      (dispose-heap-ivector a)))
+	  (enable :texture-2d)
+	  (with-primitive :quads
+	    (vertex 0 0) (tex-coord 0 0)
+	    (vertex 0 1) (tex-coord 0 1)
+	    (vertex 1 1) (tex-coord 1 1)
+	    (vertex 1 0) (tex-coord 1 0))
+	  (disable :texture-2d)
+	  (delete-textures (list obj))))
+      (with-pushed-matrix 
+	(translate -.25 0 -1.3)
+	(scale (/ 512.0) .02 1)
+	(color 1 1 1)
+	(let ((hist (make-array 256 :element-type 'fixnum)))
+	  (destructuring-bind (h w) (array-dimensions *bla*)
+	    (dotimes (i w)
+	      (dotimes (j h)
+		(incf (aref hist (min 255 (aref *bla* j i)))))))
+	  (with-primitive :lines 
+	    (vertex 0 10)
+	    (vertex 256 10)
+	    (dotimes (i 256)
+	      (vertex i 0)
+	      (vertex i (log (+ 1 (aref hist i))))))))
+      (flush)
+      (sleep (/ 61.3))
+					;   (cl-opengl-bindings:wait-sync )
+      (glut:post-redisplay))))
 
 
 (progn 
