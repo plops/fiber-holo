@@ -32,7 +32,7 @@
    (read-line *serial*)))
 
 #+nil
-(write-mirror -40)
+(write-mirror -35)
 
 #.(progn
   (use-interface-dir :fftw3)
@@ -101,8 +101,42 @@
 
 (defvar *bla* (make-array (list 512 512) :element-type '(unsigned-byte 16)))
 (defvar *kbla* (make-array (list 512 512) :element-type '(unsigned-byte 16)))
+(defvar *bla-sep* (make-array (list 128 128) :element-type '(complex double-float)))
+
+
+
 #+nil
 (defparameter *kbla* (scale-ub16 (ft *bla*)))
+
+#+nil
+(progn
+  (setf *bla-sep* (ft (extract (ft *bla*)
+			    :x (+ 256 -192) :y (+ 256 45) :w 128 :h 128)))
+  nil)
+
+(defun extract (a &key
+                (x (floor (array-dimension a 1) 2))
+                (y (floor (array-dimension a 0) 2)) 
+                (w (next-power-of-two (min x y 
+                                           (- (array-dimension a 1) x)
+                                           (- (array-dimension a 0) y))))
+                (h w))
+  (let* ((b1 (make-array (* h w) :element-type (array-element-type a)
+                         :initial-element 0))
+         (b (make-array (list h w)
+                        :element-type (array-element-type a)
+                        :displaced-to b1))
+         (ox (- x (floor w 2)))
+         (oy (- y (floor h 2))))
+    (assert (<= 0 ox))
+    (assert (<= 0 oy))
+    (assert (< (+ w ox) (array-dimension a 1)))
+    (assert (< (+ h oy) (array-dimension a 0)))
+    (dotimes (j h)
+      (dotimes (i w)
+        (setf (aref b j i)
+              (aref a (+ j oy) (+ i ox)))))
+    b))
 
 
 (defun scale-ub16 (a)
@@ -321,8 +355,17 @@
 (ccl:process-run-function "fft" 
 			  #'(lambda ()
 			      (loop while *fft-p* do
-				   (defparameter *kbla* (scale-ub16 (ft *bla*)))
-				   )))
+				   (let ((f (ft *bla*)))
+				     (defparameter *kbla* (scale-ub16 f))
+				     (setf *bla-sep* 
+					   (ft (extract f
+							:x (+ 256 -192) 
+							:y (+ 256 45)
+							:w 128 :h 128)))
+				     (dotimes (i 128)
+				       (dotimes (j 128)
+					 (setf (aref *bla-sep* j i)
+					       (* (expt -1 (+ j i)) (aref *bla-sep* j i)))))))))
 #+nil
 (time
  (defparameter *kbla* (scale-ub16 (ft *bla*))))
@@ -566,7 +609,22 @@
   #+nil
   (capture-and-copy-frame)
 
-
+  (defun draw-texture (ap &key (w 512) (h 512))
+    (let ((obj (first (gen-textures 1))))
+      (bind-texture :texture-2d obj)
+      (tex-parameter :texture-2d :texture-min-filter :linear)
+      (tex-parameter :texture-2d :texture-mag-filter :linear)
+      (tex-image-2d :texture-2d 0 :rgba w h 0
+		    :green :unsigned-short ap)
+      (enable :texture-2d)
+      (with-primitive :quads
+	(vertex 0 0) (tex-coord 0 0)
+	(vertex 0 1) (tex-coord 0 1)
+	(vertex 1 1) (tex-coord 1 1)
+	(vertex 1 0) (tex-coord 1 0))
+      (disable :texture-2d)
+      (delete-textures (list obj))))
+  
   (let ((rot 0))
     (defun draw ()
       (clear :color-buffer :depth-buffer)
@@ -592,66 +650,63 @@
 	(scale .5 .5 1)
 	(color 1 0 0) (rect 0 0 1 .01)
 	(color 0 1 0) (rect 0 0 .01 1))
-      (with-pushed-matrix
+      (let ((s .4))
+       (with-pushed-matrix ;; reconstructed data amplitude
+	 (translate -.5 0 -1.3)
+	 (scale s s 1)
+	 (color 1 1 1)
+	 (let ((b1 (make-array (* 128 128) 
+			       :element-type (array-element-type *bla-sep*)
+			       :displaced-to *bla-sep*)))
+	   (multiple-value-bind (a ap) (make-heap-ivector (* 128 128)
+							  '(unsigned-byte 16))
+	     (dotimes (i (* 128 128))
+	       (setf (aref a i) (min 65535 (max 0 (floor (* .08 (abs (aref b1 i))))))))
+	     (draw-texture ap :w 128 :h 128) 
+	     (dispose-heap-ivector a))))
+       (with-pushed-matrix ;; reconstructed data phase
+	 (translate 0 0 -1.3)
+	 (scale s s 1)
+	 (color 1 1 1)
+	 (let ((b1 (make-array (* 128 128) 
+			       :element-type (array-element-type *bla-sep*)
+			       :displaced-to *bla-sep*)))
+	   (multiple-value-bind (a ap) (make-heap-ivector (* 128 128)
+							  '(unsigned-byte 16))
+	     (dotimes (i (* 128 128))
+	       (setf (aref a i) (min 65535 (max 0 (floor
+						   (* (/ 65535 (* 2 pi))
+						      (+ pi (phase (aref b1 i)))))))))
+	     (draw-texture ap :w 128 :h 128) 
+	     (dispose-heap-ivector a)))))
+      (with-pushed-matrix ;; fourier transform
 	(translate -.5 0 -1.8)
 	(scale 1 1 1)
 	(color 1 1 1)
-	(let ((obj (first (gen-textures 1))))
-	  (bind-texture :texture-2d obj)
-	  
-	  (tex-parameter :texture-2d :texture-min-filter :linear)
-	  (tex-parameter :texture-2d :texture-mag-filter :linear)
-	  (let ((b1 (make-array (* 512 512) :element-type '(unsigned-byte 16)
+	(let ((b1 (make-array (* 512 512) :element-type '(unsigned-byte 16)
 				:displaced-to *kbla*)))
-	    (multiple-value-bind (a ap)
-		(make-heap-ivector (* 512 512)
-				   '(unsigned-byte 16))
+	    (multiple-value-bind (a ap) (make-heap-ivector (* 512 512) '(unsigned-byte 16))
 	      (dotimes (i (* 512 512))
 		(setf (aref a i) (min 65535 (max 0 (* 256 20  (+ (aref b1 i)))))))
-	      (tex-image-2d :texture-2d 0 :rgba 512 512 0 :green :unsigned-short
-			    ap) 
-	      (dispose-heap-ivector a)))
-	  (enable :texture-2d)
-	  (with-primitive :quads
-	    (vertex 0 0) (tex-coord 0 0)
-	    (vertex 0 1) (tex-coord 0 1)
-	    (vertex 1 1) (tex-coord 1 1)
-	    (vertex 1 0) (tex-coord 1 0))
-	  (disable :texture-2d)
-	  (delete-textures (list obj))))
-      (with-pushed-matrix
+	      (draw-texture ap :w 512 :h 512) 
+	      (dispose-heap-ivector a))))
+      (with-pushed-matrix ;; camera image
 	(translate -0.5 -1.0 -1.8)
 	(scale 1 1 1)
 	(color 1 1 1)
-	(let ((obj (first (gen-textures 1))))
-	  (bind-texture :texture-2d obj)
-	  
-	  (tex-parameter :texture-2d :texture-min-filter :linear)
-	  (tex-parameter :texture-2d :texture-mag-filter :linear)
-	  (let ((b1 (make-array (* 512 512) :element-type (array-element-type *bla*)
-				:displaced-to *bla*))
-		#+nil(w1 (make-array (* 512 512) :element-type 'double-float
-				:displaced-to *window*)))
-	    (multiple-value-bind (a ap)
-		(make-heap-ivector (* 512 512)
-				   '(unsigned-byte 16))
-	      (dotimes (i (* 512 512))
-		(setf (aref a i) (min 65535 (max 0 (* 256
-						      (+ -0 (aref b1 i)))))))
-	      (tex-image-2d :texture-2d 0 :rgba 512 512 0 :green :unsigned-short
-			    ap) 
-	      (dispose-heap-ivector a)))
-	  (enable :texture-2d)
-	  (with-primitive :quads
-	    (vertex 0 0) (tex-coord 0 0)
-	    (vertex 0 1) (tex-coord 0 1)
-	    (vertex 1 1) (tex-coord 1 1)
-	    (vertex 1 0) (tex-coord 1 0))
-	  (disable :texture-2d)
-	  (delete-textures (list obj))))
-      (with-pushed-matrix 
-	(translate -.4 0 -1.3)
-	(scale (/ 512.0) .02 1)
+	(let ((b1 (make-array (* 512 512)
+			      :element-type (array-element-type *bla*)
+			      :displaced-to *bla*)))
+	  (multiple-value-bind (a ap) (make-heap-ivector (* 512 512)
+							 '(unsigned-byte 16))
+	    (dotimes (i (* 512 512))
+	      (setf (aref a i) (min 65535 (max 0 (* 256
+						    (+ -0 (aref b1 i)))))))
+	    (draw-texture ap :w 512 :h 512)
+	    (dispose-heap-ivector a))))
+      (with-pushed-matrix  ;; histogram
+	(translate -.47 -.07 -1.3)
+	(scale (/ 512.0) .005 1)
 	(color 1 1 1)
 	(let ((hist (make-array 256 :element-type 'fixnum)))
 	  (destructuring-bind (h w) (array-dimensions *bla*)
