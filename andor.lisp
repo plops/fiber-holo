@@ -21,7 +21,30 @@
                            :flow-control nil))
 
 #+nil
-(close *serial*)
+(close *serial*) 
+
+;uvcdynctrl -d /dev/video1  -s "Exposure, Auto" 1
+;uvcdynctrl -d /dev/video1 -s "Exposure (Absolute)" 900
+
+(defun write-pgm (fn a)
+  (destructuring-bind (h w) (array-dimensions a) 
+    (with-open-file (s fn :direction :output
+                       :if-exists  :supersede
+                       :if-does-not-exist :create)
+      (format s "P5~%~a ~a~%255~%" w h))
+    (with-open-file (s fn :direction :output
+                       :if-exists  :append
+                       :if-does-not-exist :create
+                       :element-type '(unsigned-byte 8))
+      (dotimes (i w)
+        (dotimes (j h)
+         (write-byte (aref a j i) s))))))
+
+#+nil
+(progn
+  (format *serial* "v-200~%" voltage)
+  (force-output *serial*))
+
 
 (defun write-mirror (voltage)
   (format *serial* "v~d~%" voltage)
@@ -155,8 +178,9 @@
 ;;ccl::*shared-libraries*
 ;;ccl::*eeps* ;; hash table with external functions
 
-#.(progn (use-interface-dir :andor)
+#+nil(progn (use-interface-dir :andor)
        (open-shared-library "libandor.so"))
+#+nil
 (progn
   (defun get-available-cameras ()
     (rlet ((n :int))
@@ -317,6 +341,7 @@
   (set-hs-speed :typ 1 :index 0)
   (get-acquisition-timings))
 
+#+nil
 (progn
  (defun get-time ()
    (rlet ((tv :timeval))
@@ -378,11 +403,15 @@
 				   (acquire-one-image)
 				   )))
 
+(defparameter *cap-num* 0)
 #+nil
 (ccl:process-run-function "acquisition" 
 			  #'(lambda ()
 			      (loop while *acquire-p* do
-				   (capture-and-copy-frame))))
+				   (capture-and-copy-frame)
+				   (write-pgm (format nil "/media/home/martin/dat/bla~5,'0d.pgm" *cap-num*) *bla*)
+				   (incf *cap-num*)
+				   )))
 
 #+nil
 (capture-and-copy-frame)
@@ -567,7 +596,7 @@
 #+nil
 (v4l-uninit)
 #+nil
-(v4l-init :fn "/dev/video2" :w 800 :h 600)
+(v4l-init :fn "/dev/video1" :w 800 :h 600)
 #+nil
 (unless *v4l-fd*
   (v4l-open "/dev/video0"))
@@ -687,7 +716,7 @@
 				:displaced-to *kbla*)))
 	    (multiple-value-bind (a ap) (make-heap-ivector (* 512 512) '(unsigned-byte 16))
 	      (dotimes (i (* 512 512))
-		(setf (aref a i) (min 65535 (max 0 (* 256 20  (+ (aref b1 i)))))))
+		(setf (aref a i) (min 65535 (max 0 (* 256 100  (+ (aref b1 i)))))))
 	      (draw-texture ap :w 512 :h 512) 
 	      (dispose-heap-ivector a))))
       (with-pushed-matrix ;; camera image
